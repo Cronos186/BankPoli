@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "incremental": true,
+    // La cache incremental debe vivir dentro de dist: nest-cli elimina ese
+    // directorio en cada compilacion y, si la cache queda fuera, tsc considera
+    // que las salidas ya existen y no vuelve a emitirlas.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+}

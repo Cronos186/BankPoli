@@ -1,0 +1,32 @@
+# Compilacion
+/dist
+/build
+/tmp
+/coverage
+
+# Dependencias
+/node_modules
+/.pnp
+.pnp.js
+
+# Entorno
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+
+# Editores / SO
+.idea
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Cache
+*.tsbuildinfo
+.eslintcache

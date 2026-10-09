@@ -1,0 +1,27 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bankpoli-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bankpoli
+      POSTGRES_PASSWORD: bankpoli
+      POSTGRES_DB: bankpoli
+      TZ: America/Bogota
+    ports:
+      # 5433 en el host para no chocar con una instalacion local de PostgreSQL
+      - '5433:5432'
+    volumes:
+      - bankpoli_pgdata:/var/lib/postgresql/data
+      # Scripts de inicializacion: esquema, rutinas del core legacy y datos de prueba.
+      # Solo se ejecutan cuando el volumen se crea por primera vez (npm run db:reset).
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bankpoli -d bankpoli']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  bankpoli_pgdata:

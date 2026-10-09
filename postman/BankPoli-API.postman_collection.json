@@ -1,0 +1,302 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-0000-4000-8000-bankpoli0001",
+    "name": "BankPoli - API REST Transferencias interbancarias",
+    "description": "Colección de pruebas de integración de la API REST del escenario académico BankPoli (transferencias interbancarias con patrón Legacy Wrapper).\n\n=== 1. LEVANTAR LA BASE DE DATOS EN DESARROLLO ===\n\nLa API tiene dos implementaciones del núcleo transaccional. Elija una:\n\n[A] Núcleo en memoria (no requiere Docker)\n    - En .env: DB_DRIVER=memory\n    - npm install\n    - npm run start:dev\n\n[B] Núcleo en PostgreSQL (recomendado: usa las rutinas almacenadas del core legacy)\n    1) Levantar la base de datos:\n         npm run db:up        -> docker compose up -d (PostgreSQL 16 en localhost:5433)\n         npm run db:logs      -> opcional: seguir la inicialización\n       Los scripts db/init/*.sql (esquema, rutinas almacenadas y datos de prueba) se ejecutan la\n       primera vez que se crea el volumen.\n    2) Verificar que el núcleo quedó inicializado:\n         docker ps --filter name=bankpoli-postgres\n         -> debe mostrar: bankpoli-postgres | Up (healthy) | 0.0.0.0:5433->5432/tcp\n         docker exec bankpoli-postgres psql -U bankpoli -d bankpoli -c \"\\df legacy.*\"\n         docker exec bankpoli-postgres psql -U bankpoli -d bankpoli -c \"SELECT num_cta, sal_cta FROM legacy.cuentas ORDER BY num_cta;\"\n    3) Apuntar la API al núcleo PostgreSQL (.env):\n         DB_DRIVER=postgres\n         DB_HOST=localhost   DB_PORT=5433   DB_NAME=bankpoli\n         DB_USER=bankpoli    DB_PASSWORD=bankpoli   DB_SCHEMA=legacy   DB_SSL=false\n    4) Ejecutar la API:\n         npm run start:dev\n       El log debe indicar 'Conectado al nucleo transaccional simulado en localhost:5433/bankpoli'\n       y GET /api/v1/health debe responder \"motorNucleo\": \"postgres\".\n\n    Ciclo de vida de la base de datos:\n         npm run db:down    -> detener el contenedor (conserva los datos)\n         npm run db:reset   -> borrar el volumen y volver a ejecutar db/init/*.sql\n         npm run db:logs    -> ver logs del motor\n    Si la base ya existía y cambió algún script, aplíquelo manualmente:\n         docker exec -i bankpoli-postgres psql -U bankpoli -d bankpoli < db/init/02-legacy-routines.sql\n\n=== 2. COMPILAR Y EJECUTAR PARA PRODUCCIÓN ===\n\n    npm ci                 -> instala las dependencias exactas del lockfile\n    npm run build          -> compila TypeScript y genera dist/ (punto de entrada dist/main.js)\n\n    NODE_ENV=production JWT_SECRET=\"<secreto-de-32-o-mas-caracteres>\" node dist/main.js\n\n    Windows PowerShell:\n      $env:NODE_ENV='production'; $env:JWT_SECRET='<secreto>'; node dist/main.js\n\n    Alternativa con el script npm (con NODE_ENV=production ya definido en el entorno):\n      npm run start:prod\n\n    Notas de producción:\n      - Con NODE_ENV=production la API exige JWT_SECRET; si falta, no arranca (evita desplegar con\n        el secreto de desarrollo).\n      - Base de datos productiva: aplicar una única vez db/init/01-schema.sql y db/init/02-legacy-routines.sql\n        (psql -f). db/init/03-seed.sql contiene datos de prueba y NO debe aplicarse en producción.\n      - Configure DB_SSL=true y CORS_ORIGINS con los dominios reales de los canales digitales.\n      - TLS/HTTPS se termina en el proxy inverso; la aplicación escucha HTTP internamente.\n      - No hay que recompilar para cambiar variables de entorno: se leen al arrancar.\n      - Apunte la variable {{baseUrl}} al entorno desplegado, p. ej. https://api.bankpoli.local/api/v1\n\n=== 3. EJECUTAR LA COLECCIÓN ===\n\n    1. Ajuste la variable baseUrl (por defecto http://localhost:3000/api/v1).\n    2. Ejecute la carpeta '01 - Autenticación': el token JWT se guarda automáticamente en la variable token.\n    3. Ejecute las carpetas '02 - Cuentas' y '03 - Transferencias' (esta última guarda idTransferencia).\n    4. La carpeta '00 - Estado del servicio' permite verificar disponibilidad y qué motor del núcleo está activo.\n\nCredenciales de prueba: cliente1 / Cliente123*  ·  cajero1 / Cajero123*  ·  admin1 / Admin123*\n(inactivo1 está INACTIVO a propósito, para validar el 401).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3000/api/v1", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "idTransferencia", "value": "", "type": "string" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "00 - Estado del servicio",
+      "item": [
+        {
+          "name": "Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const cuerpo = pm.response.json();",
+                  "console.log('Motor del nucleo transaccional activo:', cuerpo.motorNucleo);",
+                  "pm.test('La API esta disponible (motor: ' + cuerpo.motorNucleo + ')', () => pm.response.to.have.status(200));",
+                  "pm.test('Informa el motor del nucleo envuelto por el Legacy Wrapper', () => pm.expect(cuerpo.motorNucleo).to.be.oneOf(['postgres', 'memory']));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] },
+            "description": "Recurso publico de verificacion de disponibilidad."
+          }
+        }
+      ]
+    },
+    {
+      "name": "01 - Autenticacion",
+      "item": [
+        {
+          "name": "Login - Cliente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Autenticacion exitosa (200)', () => pm.response.to.have.status(200));",
+                  "const cuerpo = pm.response.json();",
+                  "pm.test('Devuelve un token JWT', () => pm.expect(cuerpo.accessToken.split('.')).to.have.lengthOf(3));",
+                  "pm.collectionVariables.set('token', cuerpo.accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario\": \"cliente1\",\n  \"contrasena\": \"Cliente123*\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "description": "Autentica un consumidor y genera el token JWT. El token se guarda en la variable de coleccion."
+          }
+        },
+        {
+          "name": "Login - Cajero (guarda token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Autenticacion exitosa (200)', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('token', pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario\": \"cajero1\",\n  \"contrasena\": \"Cajero123*\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "Login - Administrador (guarda token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Autenticacion exitosa (200)', () => pm.response.to.have.status(200));",
+                  "pm.collectionVariables.set('token', pm.response.json().accessToken);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario\": \"admin1\",\n  \"contrasena\": \"Admin123*\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "Login - Credenciales invalidas (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('Rechaza credenciales invalidas (401)', () => pm.response.to.have.status(401));"] }
+            }
+          ],
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario\": \"cliente1\",\n  \"contrasena\": \"ClaveIncorrecta1\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "Perfil del usuario autenticado",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/auth/perfil", "host": ["{{baseUrl}}"], "path": ["auth", "perfil"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Cuentas",
+      "item": [
+        {
+          "name": "Consultar saldo",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Consulta exitosa (200)', () => pm.response.to.have.status(200));",
+                  "pm.test('Devuelve el saldo como numero', () => pm.expect(pm.response.json().saldo).to.be.a('number'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cuentas/1000123456/saldo",
+              "host": ["{{baseUrl}}"],
+              "path": ["cuentas", "1000123456", "saldo"]
+            }
+          }
+        },
+        {
+          "name": "Consultar saldo - cuenta inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('Cuenta no encontrada (404)', () => pm.response.to.have.status(404));"] }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cuentas/9999999999/saldo",
+              "host": ["{{baseUrl}}"],
+              "path": ["cuentas", "9999999999", "saldo"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Transferencias",
+      "item": [
+        {
+          "name": "Crear transferencia (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Transferencia creada (201)', () => pm.response.to.have.status(201));",
+                  "const cuerpo = pm.response.json();",
+                  "pm.test('Estado PROCESADA', () => pm.expect(cuerpo.estado).to.eql('PROCESADA'));",
+                  "pm.collectionVariables.set('idTransferencia', cuerpo.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cuentaOrigen\": \"1000123456\",\n  \"cuentaDestino\": \"2000654321\",\n  \"monto\": 250000,\n  \"concepto\": \"Transferencia interbancaria\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/transferencias", "host": ["{{baseUrl}}"], "path": ["transferencias"] }
+          }
+        },
+        {
+          "name": "Crear transferencia - saldo insuficiente (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('Saldo insuficiente (409)', () => pm.response.to.have.status(409));"] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cuentaOrigen\": \"4000123456\",\n  \"cuentaDestino\": \"2000654321\",\n  \"monto\": 500000,\n  \"concepto\": \"Prueba de saldo insuficiente\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/transferencias", "host": ["{{baseUrl}}"], "path": ["transferencias"] }
+          }
+        },
+        {
+          "name": "Crear transferencia - misma cuenta (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": { "exec": ["pm.test('Solicitud invalida (400)', () => pm.response.to.have.status(400));"] }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"cuentaOrigen\": \"1000123456\",\n  \"cuentaDestino\": \"1000123456\",\n  \"monto\": 1000,\n  \"concepto\": \"Misma cuenta\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/transferencias", "host": ["{{baseUrl}}"], "path": ["transferencias"] }
+          }
+        },
+        {
+          "name": "Consultar transferencia por id",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Consulta exitosa (200)', () => pm.response.to.have.status(200));",
+                  "pm.test('Corresponde a la transferencia creada', () => pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('idTransferencia')));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/transferencias/{{idTransferencia}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["transferencias", "{{idTransferencia}}"]
+            }
+          }
+        },
+        {
+          "name": "Listar transferencias (administrador)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/transferencias?limite=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["transferencias"],
+              "query": [{ "key": "limite", "value": "20" }]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
